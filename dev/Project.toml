@@ -1,4 +1,9 @@
 [deps]
+AbstractTrees = "1520ce14-60c1-5f80-bbc7-55ef81b5835c"
 Chain = "8be319e6-bccf-4806-a6f7-6fae938471bc"
+CombinedParsers = "5ae71ed2-6f8a-4ed1-b94f-e14e8158f19e"
 Diana = "070d9d8b-17a7-5814-83fa-42438ba5c6e0"
+Images = "916415d5-f1e6-5110-898d-aaa5f9f070e0"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"

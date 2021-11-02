@@ -4,7 +4,9 @@ authors = ["Oscar Andre <bmp13oan@student.lu.se>"]
 version = "0.1.0"
 
 [deps]
+AbstractTrees = "1520ce14-60c1-5f80-bbc7-55ef81b5835c"
 BlockArrays = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
+CombinedParsers = "5ae71ed2-6f8a-4ed1-b94f-e14e8158f19e"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Distances = "b4f34e82-e78d-54a5-968a-f98e89d6e8f7"
 Hungarian = "e91730f6-4275-51fb-a7a0-7064cfbd3b39"

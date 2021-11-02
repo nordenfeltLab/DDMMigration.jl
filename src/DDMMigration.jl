@@ -10,8 +10,13 @@ using SegmentationUtils
 using RegionProps
 using StatsBase
 using DataFrames
-include("ImageUtils.jl")
+using DDMFramework
 
+export MigrationState
+
+include("ImageUtils.jl")
+include("lazydf.jl")
+include("query.jl")
 
 
 struct FOV
@@ -58,7 +63,7 @@ function MigrationState(params::Dict{String, Any})
     )
 end
 
-function handle_update(state::MigrationState, data)
+function DDMFramework.handle_update(state::MigrationState, data)
     update_state!(state, data["image"], data["params"])
 end
 
@@ -104,58 +109,84 @@ function get_labelmap(tracks::DataFrame, fov::FOV, fov_id::Int64)
     Dict(zip(tracks_filt.label_id, tracks_filt.track_id)), start_id
 end
 
+table_filters = Dict(
+     "bin" => function bin(data, sel, n)
+         data = filter(!isnan, data)
+         if sel == 1
+             hi = quantile(data, sel/n)
+             row -> row < hi
+         elseif sel == n
+             lo = quantile(data, (sel-1)/n)
+             row -> row > lo
+         else
+             lo, hi = quantile(data, [(sel-1)/n, sel/n])
+             row -> lo <= row < hi
+         end
+     end
+)
 
-
-# sample_df
-# save_DDA_results
-# results_to_dict
-# shift_to_centre_coords
-
-
-function get_results(state::MigrationState, requested)
-    response = prepare_results(state, requested)
-    if isnothing(response)
-        json(Dict(:response => false))
-    else
-        json(response)
+function collect_state(state::MigrationState, args)
+    args = Dict(args)
+    objects = DataFrame()
+    for (fov_id, fov) in enumerate(state.fov_arr)
+        for (t, prop) in enumerate(fov.data)
+            df = copy(prop)
+            df[!, :fov_id] .= fov_id
+            df[!, :t] .= t
+            append!(objects, df)
+        end
     end
+
+    df = innerjoin(state.tracks, objects, on = [:fov_id, :t, :label_id])
+
+    index = [:fov_id, :track_id]
+    distcols = [:centroid_x,:centroid_y]
+
+    @time data = map(gdf for gdf in groupby(df, index)) do gdf
+        (gdf=gdf, centroid_x=diff(gdf.centroid_x), centroid_y=diff(gdf.centroid_y))
+    end |> DataFrame
+
+
+    data = LazyDF(
+        data;
+        mean_speed=[:centroid_x, :centroid_y] => (x, y) -> mean(hypot.(x, y)),
+        last_x=[:centroid_x] => x -> x[end]
+    )
+    if haskey(args, "filter")
+        filters = mapfoldl(vcat, args["filter"]; init=Pair{String, Base.Callable}[]) do (column, filters)
+            map(filters) do filt
+                op = table_filters[filt["op"]](data[!,column], filt["args"]...)
+                column => op
+            end
+        end
+        foreach(f -> filter!(f, data), filters)
+    end
+    data
 end
 
-#filter_parser = Dict(
-#    ".>" => .>,
-#    ".<" => .<,
-#    "&&" => &&,
-#    "|" => |,
-#)
+schema = Dict(
+    "query" => "Query",
+    "Query" => Dict(
+        "migration" => "Migration"
+    ),
+    "Migration" => Dict(
+        "centroid_x" => "Column",
+        "centroid_y" => "Column",
+        "mean_speed" => "Column"
+    ),
+    "Column" => Dict(
+        "name" => "String"
+    )
+)
 
+resolvers(state) = Dict(
+    "Query" => Dict(
+        "migration" => (parent, args) -> collect_state(state, args)
+    )
+)
 
-
-function prepare_results(state::MigrationState, requested)
-    n = requested["n"]
-    
-    props = get_latest_props(state.fov_array, 10)
-    df = join(state.tracks, props, on = [:fov_id, :t, :label_id])
-    
-    speed_df = calculate_speed_stats(df)
-    speed_df = by(speed_df, :fov_id) do fovdf
-        filter(r -> r.t .== maximum(fovdf.t), fovdf)
-    end
-    
-    speed_df[!,:speed_group] = discretize(speed_df.speed_mean, 10)
-    
-    #speed_groups = [1,10]
-    selected_groups = [filter(x -> x.speed_group == n, speed_df) for n in speed_groups]
-    
-    if all(map(g -> size(g,1) >= n, selected_groups))
-        results = vcat(map(g -> sample_df(g,n), selected_groups)...)
-        results[!, :stage_pos_x] = (i -> state.fov_arr[i].x).(results.fov_id)
-        results[!, :stage_pos_y] = (i -> state.fov_arr[i].y).(results.fov_id)
-        #save???
-        #response = result_to_dict
-        #response[:response] = true
-        response
-    end
+function DDMFramework.query_state(state::MigrationState, query)
+    execute_query(q, schema, resolvers)
 end
 
-export MigrationState, handle_update
 end # module
