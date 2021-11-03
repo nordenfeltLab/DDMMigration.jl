@@ -7,11 +7,8 @@ function snr_binarize(img; sigma = 4)
 end
 
 
-function organize_images(images, params)
-    Dict(Symbol(p["definition"]) => @view(images[:,:,p["index"]]) for p in params["channels"])
-end
 
-function regionprop_analysis(img, minsize=150, maxsize=2000, n_sigma=3.0)
+function regionprop_analysis(img; minsize=150, maxsize=2000, n_sigma=3.0 )
     seg =
         snr_binarize(img, sigma = n_sigma) |> 
         label_components |> 

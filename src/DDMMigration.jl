@@ -10,6 +10,7 @@ using SegmentationUtils
 using RegionProps
 using StatsBase
 using DataFrames
+using BioformatsLoader
 using DDMFramework
 
 export MigrationState
@@ -17,7 +18,6 @@ export MigrationState
 include("ImageUtils.jl")
 include("lazydf.jl")
 include("query.jl")
-
 
 struct FOV
     x::Float64
@@ -28,6 +28,7 @@ include("TrackUtils.jl")
 struct MigrationState
     fov_arr::Vector{FOV}
     tracks::DataFrame
+    config::Dict{String, Any}
 end
 
 Base.push!(x::FOV, df::DataFrame) = push!(x.data, df)
@@ -59,11 +60,30 @@ function MigrationState(params::Dict{String, Any})
             track_id = Int[],
             t = Int[],
             fov_id = Int[]
-        )
+        ),
+        params
     )
 end
 
+function parse_image_meta!(data)
+    push_new_lazy!(data["params"], "image_meta") do
+        Dict()
+    end
+    let (mdata, params) = (data["image"].Pixels, data["params"])
+        push_new_lazy!(params, "stage_pos_x") do 
+            mdata[:Plane][1][:PositionX]
+        end
+        push_new_lazy!(params, "stage_pos_y") do 
+            mdata[:Plane][1][:PositionY]
+        end
+        push_new_lazy!(params, "img_size") do
+            mdata[:SizeY], image.Pixels[:SizeX], image.Pixels[:SizeZ]
+        end
+    end
+end
+
 function DDMFramework.handle_update(state::MigrationState, data)
+    parse_image_meta!(data) #subject to change
     update_state!(state, data["image"], data["params"])
 end
 
@@ -73,9 +93,11 @@ function get_fov!(state::MigrationState, params)
 end
 
 function update_state!(state::MigrationState, image, params; shading = true)
-    fov_id, fov = get_fov!(state, params["experiment_parameters"])
-    image = organize_images(image, params)
-    props = regionprop_analysis(image[:Nuclei]) |> DataFrame
+    ref_c = params["segmentation"]["reference_channel"]
+    seg_p = to_tuple(params["segmentation"])
+    
+    fov_id, fov = get_fov!(state, params["image_meta"])
+    props = regionprop_analysis(image[ref_c]), seg_p...) |> DataFrame
     
     props = vcat(DataFrame(
             label_id = Int[],
@@ -189,4 +211,21 @@ function DDMFramework.query_state(state::MigrationState, query)
     execute_query(q, schema, resolvers)
 end
 
+function readnd2(io)
+    mktempdir() do d
+        path = joinpath(d, "file.nd2")
+        open(path, "w") do iow
+            write(iow, read(io))
+        end
+        BioformatsLoader.bf_import(path)
+    end
+end
+
+function __init__()
+    register_mime_type("imgage/nd2", readnd2)
+    add_plugin("migration", MigrationState)
+end
+
+
+export MigrationState, handle_update
 end # module
