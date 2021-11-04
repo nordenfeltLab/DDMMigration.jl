@@ -2,7 +2,7 @@ module QueryParser
 using CombinedParsers
 using AbstractTrees
 
-export Query, parse_query
+export Query, parse_query, parse_selection_set
 
 struct Query
     field::String
@@ -79,7 +79,7 @@ end
     push!(data, arg_obj)
 
     selection = Delayed(Any)
-    selection_set = (space * "{" * Repeat(selection) * "}" * space)[3]
+    @syntax selection_set = (space * "{" * Repeat(selection) * "}" * space)[3]
 
     field = map(name * Optional(arg_list) * Optional(selection_set)) do (field, args, subquery)
         Query(field, subquery...; args = ismissing(args) ? Dict() : args)
@@ -92,5 +92,6 @@ end
 end;
 
 parse_query(str) = parse(query, str)
+parse_selection_set(str) = parse(selection_set, str)
 
 end
