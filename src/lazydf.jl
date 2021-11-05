@@ -11,7 +11,7 @@ function Base.filter!(filt, df::LazyDF)
 end
 
 Base.getindex(t::LazyDF, ::typeof(!), col) = t[col]
-function Base.getindex(t::LazyDF, col::String)
+function Base.getindex(t::LazyDF, col::AbstractString)
     if haskey(t.transforms, col)
         columns, op = t.transforms[col]
         map(op, (t.df[t.selection, c] for c in columns)...)

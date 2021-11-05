@@ -26,5 +26,5 @@ function execute_query(query::Vector{Query}, schema, resolvers; parent=nothing, 
 end
 
 function execute_query(q::String, args...; kwargs...)
-    execute_query(parse_selection_set(q["query"]), args...; kwargs...)
+    execute_query(Vector{Query}(parse_selection_set(q)), args...; kwargs...)
 end

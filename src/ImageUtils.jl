@@ -1,14 +1,11 @@
 
-
 function snr_binarize(img; sigma = 4)
     m,s = sigma_clipped_stats(img)
     
     img .> m + s*sigma
 end
 
-
-
-function regionprop_analysis(img; minsize=150, maxsize=2000, n_sigma=3.0 )
+function regionprop_analysis(img; minsize=150, maxsize=2000, n_sigma=3.0, kwargs...)
     seg =
         snr_binarize(img, sigma = n_sigma) |> 
         label_components |> 
