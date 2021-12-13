@@ -10,7 +10,6 @@ function regionprop_analysis(img; minsize=150, maxsize=2000, n_sigma=3.0, kwargs
         snr_binarize(img, sigma = n_sigma) |> 
         label_components |> 
         sparse
-    
     counts = countmap(nonzeros(seg))
     for (i, j, v) in zip(findnz(seg)...)
         if counts[v] < minsize || counts[v] > maxsize

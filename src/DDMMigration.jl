@@ -6,12 +6,14 @@ using BlockArrays
 using Distances
 using LinearAlgebra
 using Hungarian
+using NearestNeighbors
 using SegmentationUtils
 using RegionProps
 using StatsBase
 using DataFrames
 using BioformatsLoader
 using DDMFramework
+using Random
 
 using JSON
 
@@ -73,21 +75,24 @@ function push_new_lazy!(fun, d, k)
     end
     return d
 end
-        
-function parse_image_meta!(data)
-    push_new_lazy!(data["params"], "image_meta") do
-        Dict()
+
+function parse_image_meta!(state, data)
+    push_new_lazy!(state.config, "image_meta") do
+        Dict{String, Any}(
+            "stage_pos_x" => [],
+            "stage_pos_y" => []
+        )
     end
-    let (mdata, params) = (data["image"].Pixels, data["params"]["image_meta"])
-        push_new_lazy!(params, "stage_pos_x") do 
-            mdata[:Plane][1][:PositionX]
-        end
-        push_new_lazy!(params, "stage_pos_y") do 
-            mdata[:Plane][1][:PositionY]
-        end
+
+    let (mdata, params) = (data["image"].Pixels, state.config["image_meta"])
+
+        push!(params["stage_pos_x"], mdata[:Plane][1][:PositionX])
+        push!(params["stage_pos_y"], mdata[:Plane][1][:PositionY])
+
         push_new_lazy!(params, "img_size") do
-            mdata[:SizeY], mdata[:SizeX], mdata[:SizeZ]
+            (y = mdata[:SizeY], x = mdata[:SizeX], z = mdata[:SizeZ])
         end
+        
     end
 end
 
@@ -97,26 +102,25 @@ function drop_empty_dims(img::ImageMeta)
 end
 
 function DDMFramework.handle_update(state::MigrationState, data)
-    parse_image_meta!(data) #subject to change
+    parse_image_meta!(state,data) #subject to change
     update_state!(
         state,
-        drop_empty_dims(data["image"]), #subject to change
-        data["params"]
+        drop_empty_dims(data["image"]) #subject to change,
     )
 end
 
 function get_fov!(state::MigrationState, params)
-    id = get_fov_id!(state, params["stage_pos_x"], params["stage_pos_y"])
+    id = get_fov_id!(state, params["stage_pos_x"][end], params["stage_pos_y"][end])
     id, state.fov_arr[id]
 end
 
 to_named_tuple(dict::Dict{K,V}) where {K,V} = NamedTuple{Tuple(Iterators.map(Symbol,keys(dict))), NTuple{length(dict),V}}(values(dict))
 
-function update_state!(state::MigrationState, image, params)
-    seg_params = state.config[["analysis"]"segmentation"]
+function update_state!(state::MigrationState, image)
+    display("analyzing image...")
+    seg_params = state.config["analysis"]["segmentation"]
     ref_c = seg_params["reference_channel"]
-
-    fov_id, fov = get_fov!(state, params["image_meta"])
+    fov_id, fov = get_fov!(state, state.config["image_meta"])
     
     ref_props = regionprop_analysis(
         image[ref_c,:,:];
@@ -132,7 +136,7 @@ function update_state!(state::MigrationState, image, params)
         cols=:union
     )
     push!(fov,props)
-
+    
     if length(fov.data) > 1
         update_tracks!(state, fov, fov_id)
     end
@@ -168,46 +172,119 @@ table_filters = Dict(
              lo, hi = quantile(data, [(sel-1)/n, sel/n])
              row -> lo <= row < hi
          end
-     end
+    end,
+    ">" => function gt(data,v)
+        >(v)
+    end,
+    "<" => function lt(data,v)
+        <(v)
+    end
 )
 
-function collect_state(state::MigrationState, args)
-    args = Dict(args)
+to_stage_pos(xv,yv,stage_x,stage_y, p) = to_stage_pos(xv,
+                                                      yv,
+                                                      stage_x,
+                                                      stage_y,
+                                                      p["system"]["camera_M"],
+                                                      p["system"]["pixelmicrons"],
+                                                      p["image_meta"]["img_size"].y,
+                                                      p["image_meta"]["img_size"].x
+                                                  )
+function to_stage_pos(xv,yv,stage_x,stage_y, camera_m, pixelmicrons, height, width)
+    translation(x, p) =  x .* p.pixelmicrons .+ [p.y p.x]
+    centre_coords(x, h, w) = ((x .- ([h w] ./2)) .* [-1 1])'
+    camera_M = [camera_m["a11"] camera_m["a12"]; camera_m["a21"] camera_m["a22"]]
+    p = (pixelmicrons=pixelmicrons, y=stage_y, x=stage_x, h=height, w=width)
+    
+    corr_coords = camera_M * centre_coords(hcat(yv,xv), p.h, p.w)
+    translation(corr_coords', p)[:]
+end
+
+function sample_df(df, n::Int64, seed::Int64 = 1234)
+    sel = df.selection
+    n_tot = length(sel)
+    index = randperm(MersenneTwister(seed), n_tot)[1:min(n, n_tot)]
+    
+    select(df, sel[index])
+end
+
+function proximity(pos,selected,r)
+    reduced_pos =reduce(hcat, pos)
+    tree = KDTree(@view reduced_pos[:,selected])
+    idxs = inrange(tree, reduced_pos, r, true)
+    length.(idxs)
+end
+
+function collect_objects(state)
     objects = DataFrame()
     for (fov_id, fov) in enumerate(state.fov_arr)
         for (t, prop) in enumerate(fov.data)
             df = copy(prop)
             df[!, :fov_id] .= fov_id
             df[!, :t] .= t
+            df[!, :stage_x] .= fov.x
+            df[!, :stage_y] .= fov.y
             append!(objects, df)
         end
     end
+    objects
+end
 
+function collect_state(state::MigrationState, args)
+    args = Dict(args)
+    objects = collect_objects(state)
     df = innerjoin(state.tracks, objects, on = [:fov_id, :t, :label_id])
-
     index = [:fov_id, :track_id]
     distcols = [:centroid_x,:centroid_y]
 
     @time data = map(gdf for gdf in groupby(df, index)) do gdf
         (gdf=gdf, centroid_x=diff(gdf.centroid_x), centroid_y=diff(gdf.centroid_y))
     end |> DataFrame
-
+    
+    stage_pos_transform(x, y, gdf) = to_stage_pos(x,y, gdf.stage_x[1], gdf.stage_y[1], state.config)
+    
     data = LazyDF(
         data;
-        mean_speed=[:centroid_x, :centroid_y] => (x, y) -> mean(hypot.(x, y)),
-        last_x=[:centroid_x] => x -> x[end],
-        last_pos=[:centroid_x, :centroid_y] => (x,y) -> [x[end],kjjjjjjkk y[end]]
+        mean_speed=[:centroid_x, :centroid_y] => ByRow((x, y) -> mean(hypot.(x, y))),
+
+        last_x=[:gdf] => ByRow(gdf -> gdf.centroid_x[end]),
+        last_y=[:gdf] => ByRow(gdf -> gdf.centroid_y[end]),
+        last_stage_pos= [:last_x, :last_y, :gdf] => ByRow(stage_pos_transform),
+        top_speed_density    = [:last_stage_pos, :mean_speed] => (pos, speed) -> proximity(pos, speed .> 14.35, 150),
+        bottom_speed_density = [:last_stage_pos, :mean_speed] => (pos, speed) -> proximity(pos, speed .< 6.66 , 150),
+        fov_id = [:gdf] => ByRow(gdf -> gdf.fov_id[end])
     )
-    if haskey(args, "filter")
+    
+    
+    data = if haskey(args, "filter")
         filters = mapfoldl(vcat, args["filter"]; init=Pair{String, Base.Callable}[]) do (column, filters)
             map(filters) do filt
                 op = table_filters[filt["op"]](data[!,column], filt["args"]...)
                 column => op
             end
         end
-        foreach(f -> filter!(f, data), filters)
+        reduce((d, f) -> filter(f, d), filters; init=data)
+    else
+        data
     end
-    data
+    
+    if haskey(args, "order")
+        columns = [o == "asc" ? data[c] : -data[c] for (o, c) in args["order"]]
+        key_type = Tuple{eltype.(columns)...}
+        by(i) = key_type((c[i] for c in columns))
+        data = select(data, sort(1:nrow(data); by))
+    end
+        
+    if haskey(args, "sample")
+        n = args["sample"]["n"]
+        seed = args["sample"]["seed"]
+        sample_df(data, n, seed)
+    elseif haskey(args, "limit")
+        n = args["limit"]
+        limit(data, n)
+    else
+        data
+    end
 end
 
 function get_fovs(state, args)
@@ -224,14 +301,19 @@ schema = Dict(
     ),
     "Migration" => Dict(
         "centroid_x" => "Column",
-        "last_x" => "Column",
-        "last_pos" => "Column",
         "centroid_y" => "Column",
-        "mean_speed" => "Column"
+        "last_x" => "Column",
+        "last_y" => "Column",
+        "last_stage_pos" => "Column",
+        "top_speed_density" => "Column",
+        "bottom_speed_density" => "Column",
+        "mean_speed" => "Column",
+        "fov_id" => "fov_id"
     ),
     "Column" => Dict(
         "name" => "String"
     )
+    
 )
 
 resolvers(state) = Dict(
@@ -243,6 +325,10 @@ resolvers(state) = Dict(
 
 function DDMFramework.query_state(state::MigrationState, query)
     execute_query(query["query"], schema, resolvers(state)) |> JSON.json
+end
+
+function Base.show(io::IO, mime::MIME"text/html", state::MigrationState)
+    show(io, mime, collect_objects(state))
 end
 
 function readnd2(io)
@@ -261,5 +347,5 @@ function __init__()
 end
 
 
-export MigrationState, handle_update
+export handle_update
 end # module
