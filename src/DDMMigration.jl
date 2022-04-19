@@ -14,21 +14,22 @@ using DataFrames
 using BioformatsLoader
 using DDMFramework
 using Random
+using DataStructures
 
 using JSON
 
 export MigrationState
 
 include("ImageUtils.jl")
-include("lazydf.jl")
-include("query.jl")
+#include("lazydf.jl")
+#include("query.jl")
+include("TrackUtils.jl")
 
 struct FOV
     x::Float64
     y::Float64
     data::Array{DataFrame}
 end
-include("TrackUtils.jl")
 struct MigrationState
     fov_arr::Vector{FOV}
     tracks::DataFrame
@@ -40,8 +41,8 @@ Base.push!(x::MigrationState, fov::FOV) = push!(x.fov_arr, fov)
 
 function find_fov_id(x::Float64, y::Float64, fov_arr::Vector{FOV})
     findfirst(fov ->
-        isapprox(x, fov.x, atol=1.0) &&
-        isapprox(y, fov.y, atol=1.0),
+        isapprox(x, fov.x, atol=1.2) &&
+        isapprox(y, fov.y, atol=1.2),
     fov_arr
     )
 end
@@ -92,7 +93,9 @@ function parse_image_meta!(state, data)
         push_new_lazy!(params, "img_size") do
             (y = mdata[:SizeY], x = mdata[:SizeX], z = mdata[:SizeZ])
         end
-        
+        push_new_lazy!(params, "pixelmicrons") do
+            mdata[:PhysicalSizeX]
+        end
     end
 end
 
@@ -116,15 +119,21 @@ end
 
 to_named_tuple(dict::Dict{K,V}) where {K,V} = NamedTuple{Tuple(Iterators.map(Symbol,keys(dict))), NTuple{length(dict),V}}(values(dict))
 
+
 function update_state!(state::MigrationState, image)
     display("analyzing image...")
-    seg_params = state.config["analysis"]["segmentation"]
-    ref_c = seg_params["reference_channel"]
+    seg_params, ref_c, track_params = let p = state.config["analysis"]
+        seg = p["segmentation"]["function"]
+        ref_c = p["primary_channel"]
+        track_params = p["tracking"]
+        seg,ref_c,track_params
+    end
+    
     fov_id, fov = get_fov!(state, state.config["image_meta"])
     
     ref_props = regionprop_analysis(
         image[ref_c,:,:];
-        to_named_tuple(seg_params)...
+        to_named_tuple(seg_fun_params)...
         ) |> DataFrame
     
     props = vcat(DataFrame(
@@ -138,15 +147,19 @@ function update_state!(state::MigrationState, image)
     push!(fov,props)
     
     if length(fov.data) > 1
-        update_tracks!(state, fov, fov_id)
+        update_tracks!(state,
+            fov,
+            fov_id;
+            to_named_tuple(track_params)...
+        )
     end
     
     ("0", state)
 end
 
-function update_tracks!(state::MigrationState, fov::FOV, fov_id::Int64)
+function update_tracks!(state::MigrationState, fov::FOV, fov_id::Int64;maxdist=20.0, kwargs...)
     label_mapping, start_id = get_labelmap(state,fov,fov_id)
-    tracks = track(fov, fov_id, length(fov.data) .+ (-1:0), label_mapping, start_id)
+    tracks = track(fov, fov_id, length(fov.data) .+ (-1:0), label_mapping, start_id,maxdist)
     append!(state.tracks,tracks)
 end
 
@@ -176,8 +189,14 @@ table_filters = Dict(
     ">" => function gt(data,v)
         >(v)
     end,
+    "max" => function _max(data)
+        ==(maximum(data))
+    end,
     "<" => function lt(data,v)
         <(v)
+    end,
+    "eq" => function eq(data,v)
+        ==(v)
     end
 )
 
@@ -224,7 +243,7 @@ function collect_objects(state)
             df[!, :t] .= t
             df[!, :stage_x] .= fov.x
             df[!, :stage_y] .= fov.y
-            append!(objects, df)
+            append!(objects, df)#,cols=:subset)
         end
     end
     objects
@@ -242,17 +261,22 @@ function collect_state(state::MigrationState, args)
     end |> DataFrame
     
     stage_pos_transform(x, y, gdf) = to_stage_pos(x,y, gdf.stage_x[1], gdf.stage_y[1], state.config)
-    
+    stage_getter(gdf) = [gdf.stage_x[end], gdf.stage_y[end]]
     data = LazyDF(
         data;
         mean_speed=[:centroid_x, :centroid_y] => ByRow((x, y) -> mean(hypot.(x, y))),
-
-        last_x=[:gdf] => ByRow(gdf -> gdf.centroid_x[end]),
-        last_y=[:gdf] => ByRow(gdf -> gdf.centroid_y[end]),
-        last_stage_pos= [:last_x, :last_y, :gdf] => ByRow(stage_pos_transform),
+        track = [:gdf] => ByRow(gdf -> Dict("x" => gdf.centroid_x, "y" => gdf.centroid_y)),
+        last_x= [:gdf] => ByRow(gdf -> gdf.centroid_x[end]),
+        last_y= [:gdf] => ByRow(gdf -> gdf.centroid_y[end]),
+        last_stage_pos = [:last_x, :last_y, :gdf] => ByRow(stage_pos_transform),
         top_speed_density    = [:last_stage_pos, :mean_speed] => (pos, speed) -> proximity(pos, speed .> 14.35, 150),
         bottom_speed_density = [:last_stage_pos, :mean_speed] => (pos, speed) -> proximity(pos, speed .< 6.66 , 150),
-        fov_id = [:gdf] => ByRow(gdf -> gdf.fov_id[end])
+        fov_id = [:gdf] => ByRow(gdf -> gdf.fov_id[end]),
+        track_id = [:gdf] => ByRow(gdf -> gdf.track_id[end]),
+        track_length = [:gdf] => ByRow(gdf -> nrow(gdf)),
+        timepoint = [:gdf] => ByRow(gdf -> gdf.t[end]),
+        
+        stage_pos = [:gdf] => ByRow(gdf -> stage_getter(gdf))
     )
     
     
@@ -288,7 +312,7 @@ function collect_state(state::MigrationState, args)
 end
 
 function get_fovs(state, args)
-    return [Dict("x" => fov.x, "y" => fov.y, "n" => nrow.(fov.data)) for fov in state.fov_arr]
+    return [Dict("x" => fov.x, "y" => fov.y, "n" => nrow.(fov.data),"id" => id) for (id,fov) in enumerate(state.fov_arr)]
 end
 
 schema = Dict(
@@ -308,7 +332,14 @@ schema = Dict(
         "top_speed_density" => "Column",
         "bottom_speed_density" => "Column",
         "mean_speed" => "Column",
-        "fov_id" => "fov_id"
+        "track" => "Column",
+        "fov_id" => "fov_id",
+        "track_id" => "track_id",
+        "timepoint" => "timepoint",
+        "timepoints" => "timepoint",
+        "track_length" => "track_length",
+        "stage_pos" => "Column"
+        
     ),
     "Column" => Dict(
         "name" => "String"
