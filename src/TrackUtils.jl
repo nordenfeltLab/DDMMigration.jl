@@ -6,7 +6,7 @@ function safe_extrema(arr)
     end
 end
 
-function track_blobs(positions, maxdist::Float64=20.0, blocking::Float64=10000.0)
+function track_blobs(positions, blocking::Float64=10000.0; maxdist::Float64=20.0)
     curind = size(positions[1], 2)
     ind = [i for i in 1:curind]
     inds = [[(1, i)] for i in 1:curind]
@@ -57,9 +57,9 @@ function track_blobs(positions, maxdist::Float64=20.0, blocking::Float64=10000.0
 end
 
 
-function track(fov::FOV, fov_id, range, label_mapping = Dict(), start_id = 0)
+function track(fov::FOV, fov_id, range, label_mapping = Dict(), start_id = 0,maxdist=20.0)
     trackdf = DataFrame()
-    tracks = track_blobs([Matrix(props[:,distcols])' for props in fov.data[range]])
+    tracks = track_blobs([Matrix(props[:,distcols])' for props in fov.data[range]],maxdist=maxdist)
     curr_t(t) = t+first(range)-1
     get_label(t,c) = fov.data[curr_t(t)].label_id[c]
 
