@@ -61,7 +61,7 @@ end
         number])
     @syntax jsonExpr = ( space * data * space )[2]
 
-    array = ( "[" * join(Repeat(jsonExpr),",") * "]" )[2]
+    array = ( "[" * Optional(join(Repeat(jsonExpr),",")) * "]" )[2]
     push!(data, array)
 
     pair = map(lstring * space * ":" * jsonExpr ) do (k,s,d,v)

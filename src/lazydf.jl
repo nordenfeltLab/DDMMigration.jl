@@ -19,7 +19,13 @@ end
 
 select(df::LazyDF, sel) = LazyDF(df.df, df.transforms, df.selection[sel])
 limit(df::LazyDF, n::Int64) = LimitDF(df, n)
-Base.getindex(df::LimitDF, i...) = df.df[i...][1:df.n]
+function Base.getindex(df::LimitDF, i...)
+    if length(df.df[i...]) < df.n
+        df.df[i...][1:end]
+    else
+        df.df[i...][1:df.n]
+    end
+end
 
 DataFrames.nrow(df::LazyDF) = length(df.selection)
 
