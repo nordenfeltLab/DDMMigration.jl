@@ -1,4 +1,3 @@
-
 function snr_binarize(img; sigma = 4,kwargs...)
     m,s = sigma_clipped_stats(img)
     

@@ -7,7 +7,7 @@ using Distances
 using LinearAlgebra
 using Hungarian
 using NearestNeighbors
-using SegmentationUtils
+#using SegmentationUtils
 using RegionProps
 using StatsBase
 using DataFrames
@@ -21,8 +21,6 @@ using JSON
 export MigrationState
 
 include("ImageUtils.jl")
-#include("lazydf.jl")
-#include("query.jl")
 include("TrackUtils.jl")
 
 struct FOV
