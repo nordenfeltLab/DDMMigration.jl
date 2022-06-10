@@ -45,6 +45,8 @@ jobs:
       - uses: julia-actions/setup-julia@v1
         with:
           version: '1.7'
+      - run: julia --color=yes --project=. -e 'using Pkg; Pkg.add(url="https://github.com/ahnlabb/DDMFramework.jl.git")'
+        shell: bash
       - uses: julia-actions/julia-buildpkg@v1
       - run: |
           julia --color=yes --code-coverage --project=docs/ -e 'using Pkg; Pkg.add(url="https://github.com/ahnlabb/DDMFramework.jl.git"); Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
