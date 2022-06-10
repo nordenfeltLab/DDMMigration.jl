@@ -8,7 +8,7 @@ using LinearAlgebra
 using Hungarian
 using NearestNeighbors
 #using SegmentationUtils
-using RegionProps
+#using RegionProps
 using StatsBase
 using DataFrames
 using BioformatsLoader
