@@ -30,3 +30,6 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 TiffImages = "731e570b-9d59-4bfa-96dc-6df516fadf69"
 URIs = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
+
+[compat]
+BioformatsLoader = "0.3"
