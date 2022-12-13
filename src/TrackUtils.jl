@@ -62,7 +62,7 @@ function track(fov::FOV, fov_id, range, label_mapping = Dict(), start_id = 0,max
     tracks = track_blobs([Matrix(props[:,distcols])' for props in fov.data[range]],maxdist=maxdist)
     curr_t(t) = t+first(range)-1
     get_label(t,c) = fov.data[curr_t(t)].label_id[c]
-
+    
     for arr in tracks
         t, c = arr[1]
         label = get_label(t,c)
@@ -81,7 +81,7 @@ function track(fov::FOV, fov_id, range, label_mapping = Dict(), start_id = 0,max
         append!(trackdf, new_tracks)
 
     end
-    
+    @info "Tracked $(nrow(trackdf)) cells"
     trackdf
 end
 
