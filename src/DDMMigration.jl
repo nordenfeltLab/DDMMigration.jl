@@ -7,8 +7,8 @@ using Distances
 using LinearAlgebra
 using Hungarian
 using NearestNeighbors
-#using SegmentationUtils
-#using RegionProps
+using SegmentationUtils
+using RegionProps
 using StatsBase
 using DataFrames
 using BioformatsLoader
@@ -18,10 +18,9 @@ using DataStructures
 
 using JSON
 
-export MigrationState
 
-include("ImageUtils.jl")
-include("TrackUtils.jl")
+
+export MigrationState
 
 struct FOV
     x::Float64
@@ -33,6 +32,9 @@ struct MigrationState
     tracks::DataFrame
     config::Dict{String, Any}
 end
+
+include("ImageUtils.jl")
+include("TrackUtils.jl")
 
 Base.push!(x::FOV, df::DataFrame) = push!(x.data, df)
 Base.push!(x::MigrationState, fov::FOV) = push!(x.fov_arr, fov)
@@ -119,7 +121,7 @@ to_named_tuple(dict::Dict{K,V}) where {K,V} = NamedTuple{Tuple(Iterators.map(Sym
 
 
 function update_state!(state::MigrationState, image)
-    display("analyzing image...")
+    @info "analyzing image..."
     seg_params, ref_c, track_params = let p = state.config["analysis"]
         seg = p["segmentation"]["function"]
         ref_c = p["primary_channel"]
@@ -128,10 +130,9 @@ function update_state!(state::MigrationState, image)
     end
     
     fov_id, fov = get_fov!(state, state.config["image_meta"])
-    
     ref_props = regionprop_analysis(
         image[ref_c,:,:];
-        to_named_tuple(seg_fun_params)...
+        to_named_tuple(seg_params)...
         ) |> DataFrame
     
     props = vcat(DataFrame(
@@ -142,9 +143,11 @@ function update_state!(state::MigrationState, image)
         ref_props,
         cols=:union
     )
+    @info "Found $(nrow(props)) cells"
     push!(fov,props)
     
     if length(fov.data) > 1
+        @info "Tracking..."
         update_tracks!(state,
             fov,
             fov_id;
@@ -157,7 +160,7 @@ end
 
 function update_tracks!(state::MigrationState, fov::FOV, fov_id::Int64;maxdist=20.0, kwargs...)
     label_mapping, start_id = get_labelmap(state,fov,fov_id)
-    tracks = track(fov, fov_id, length(fov.data) .+ (-1:0), label_mapping, start_id,maxdist)
+    tracks = track(fov, fov_id, length(fov.data) .+ (-1:0), label_mapping, start_id,Float64(maxdist))
     append!(state.tracks,tracks)
 end
 
@@ -241,7 +244,7 @@ function collect_objects(state)
             df[!, :t] .= t
             df[!, :stage_x] .= fov.x
             df[!, :stage_y] .= fov.y
-            append!(objects, df)#,cols=:subset)
+            append!(objects, df)#, cols=:subset)
         end
     end
     objects
@@ -260,7 +263,7 @@ function collect_state(state::MigrationState, args)
     
     stage_pos_transform(x, y, gdf) = to_stage_pos(x,y, gdf.stage_x[1], gdf.stage_y[1], state.config)
     stage_getter(gdf) = [gdf.stage_x[end], gdf.stage_y[end]]
-    data = LazyDF(
+    data = DDMFramework.LazyDF(
         data;
         mean_speed=[:centroid_x, :centroid_y] => ByRow((x, y) -> mean(hypot.(x, y))),
         track = [:gdf] => ByRow(gdf -> Dict("x" => gdf.centroid_x, "y" => gdf.centroid_y)),
@@ -281,7 +284,7 @@ function collect_state(state::MigrationState, args)
     data = if haskey(args, "filter")
         filters = mapfoldl(vcat, args["filter"]; init=Pair{String, Base.Callable}[]) do (column, filters)
             map(filters) do filt
-                op = table_filters[filt["op"]](data[!,column], filt["args"]...)
+                op = DDMFramework.table_filters[filt["op"]](data[!,column], filt["args"]...)
                 column => op
             end
         end
@@ -294,7 +297,7 @@ function collect_state(state::MigrationState, args)
         columns = [o == "asc" ? data[c] : -data[c] for (o, c) in args["order"]]
         key_type = Tuple{eltype.(columns)...}
         by(i) = key_type((c[i] for c in columns))
-        data = select(data, sort(1:nrow(data); by))
+        data = DDMFramework.select(data, sort(1:nrow(data); by))
     end
         
     if haskey(args, "sample")
@@ -303,7 +306,7 @@ function collect_state(state::MigrationState, args)
         sample_df(data, n, seed)
     elseif haskey(args, "limit")
         n = args["limit"]
-        limit(data, n)
+        DDMFramework.limit(data, n)
     else
         data
     end
@@ -353,7 +356,7 @@ resolvers(state) = Dict(
 )
 
 function DDMFramework.query_state(state::MigrationState, query)
-    execute_query(query["query"], schema, resolvers(state)) |> JSON.json
+    DDMFramework.execute_query(query["query"], schema, resolvers(state)) |> JSON.json
 end
 
 function Base.show(io::IO, mime::MIME"text/html", state::MigrationState)
@@ -366,6 +369,7 @@ function readnd2(io)
         open(path, "w") do iow
             write(iow, read(io))
         end
+        
         BioformatsLoader.bf_import(path)[1]
     end
 end
