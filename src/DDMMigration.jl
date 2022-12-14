@@ -359,6 +359,18 @@ function DDMFramework.query_state(state::MigrationState, query)
     DDMFramework.execute_query(query["query"], schema, resolvers(state)) |> JSON.json
 end
 
+function Base.show(io::IO, state::MigrationState)
+    print(io, "MigrationState")
+    for channel in state.config["channels"]
+        print(io, " $(channel["definition"]): $(channel["name"])")
+    end
+    if isempty(state.fov_arr)
+        print(io, " (waiting for data)")
+    else
+        print(io, " (", length(state.fov_arr), " FOVs)")
+    end
+end
+
 function Base.show(io::IO, mime::MIME"text/html", state::MigrationState)
     show(io, mime, collect_objects(state))
 end
