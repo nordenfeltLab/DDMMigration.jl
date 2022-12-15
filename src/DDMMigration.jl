@@ -357,6 +357,7 @@ resolvers(state) = Dict(
 
 function DDMFramework.query_state(state::MigrationState, query)
     DDMFramework.execute_query(query["query"], schema, resolvers(state)) |> JSON.json
+
 end
 
 function Base.show(io::IO, state::MigrationState)
