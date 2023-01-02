@@ -49,7 +49,7 @@ jobs:
         shell: bash
       - uses: julia-actions/julia-buildpkg@v1
       - run: |
-          julia --color=yes --code-coverage --project=docs/ -e 'using Pkg; Pkg.add(url="https://github.com/ahnlabb/DDMFramework.jl.git"); Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+          julia --color=yes --code-coverage --project=docs/ -e 'using Pkg; Pkg.Registry.add(RegistrySpec(url = \"git@github.com:nordenfeltLab/NordenfeltLabRegistry.git\")); Pkg.add(url="https://github.com/ahnlabb/DDMFramework.jl.git"); Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
       - uses: julia-actions/julia-docdeploy@v1
         with:
           install-package: false
