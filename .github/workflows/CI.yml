@@ -45,6 +45,10 @@ jobs:
       - uses: julia-actions/setup-julia@v1
         with:
           version: '1.7'
+      - uses: julia-actions/add-julia-registry@v1
+        with:
+          key: ${{ secrets.DOCUMENTER_KEY }}
+          registry: nordenfeltLab/NordenfeltLabRegistry
       - run: julia --color=yes --project=. -e 'using Pkg; Pkg.add(url="https://github.com/ahnlabb/DDMFramework.jl.git")'
         shell: bash
       - uses: julia-actions/julia-buildpkg@v1
